@@ -50,6 +50,11 @@ Later in the minor, the boss behaviour will be trained with **reinforcement lear
 **M1 – Player**
 Movement, jumping, a dodge, a basic melee attack plus at least one second attack type (so attack preferences can be tracked), health and damage.
 
+Decisions for M1:
+- The second attack is a **thrown dagger**. Daggers are limited: the player buys them in the shop (M2). Until then the player starts with a small amount set in the Inspector. The dagger count lives behind its own small interface, so it can later be connected to the inventory and shop.
+- Input is defined in code (Input System `InputAction`s with default keyboard and gamepad bindings), not in an `.inputactions` asset.
+- David writes `Health` and `IDamageable` himself from outlines with TODO comments; Claude reviews them afterwards.
+
 **M2 – World**
 Town, plains and forest in one scene or connected scenes. A few monster types with simple behaviour. Chopping trees and mining rocks. A simple inventory and a shop in town (sell materials, buy armour that reduces damage).
 
@@ -63,6 +68,7 @@ Stairs to a second floor with a different theme and a second boss. The second bo
 
 - Unity 6 with C#. Use the project's existing packages; tell me before adding new ones.
 - Never create or edit `.meta`, `.unity` or `.prefab` files by hand. Where scenes, prefabs or objects need to be set up, either write an **Editor script** (for example a menu item `Tools/Build Concept Scene`) that I run myself, or give me clear step-by-step instructions.
-- Use simple placeholder art (coloured shapes) for now. Real medieval art comes later.
+- Use simple placeholder art (coloured shapes) for now. David makes the real medieval art himself later.
+- Art is planned at **32 pixels per unit**. Visuals (sprites, renderers) always sit on a separate child object (for example `Visual`), never on the object that holds the logic and physics, so sprites can be swapped without changing code.
 - Put scripts under `Assets/_Project/Scripts/`, in folders such as `Player`, `Enemies`, `Boss`, `World`, `Data` and `ML`.
 - Keep this file up to date if we agree on changes to the plan.

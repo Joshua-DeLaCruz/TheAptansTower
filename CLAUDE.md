@@ -28,6 +28,7 @@ All our own work goes under `Assets/_Project/`:
 - `Scripts/ML` – boss brains (rule-based and ML-Agents), the player-signal tracker, the player profile, simulated players
 - `Scripts/Arena` – level, camera, hazards
 - `Scripts/Core` – shared code (game manager, events, saving, utilities)
+- `Scripts/Editor` – editor-only tools such as scene builders (the folder must be named `Editor` so this code stays out of builds)
 - `Data` – ScriptableObjects for items, armour, monster stats and floor themes
 - `Prefabs`, `Scenes`, `Art`, `Audio`
 - Training configs go in `ml-config/` at the repository root (not inside Assets).
@@ -52,7 +53,7 @@ Give each subagent all the context it needs in your message, because it starts w
 - Keep scripts short and focused. One class per file, file name equals class name.
 - Bosses get their decisions from a brain behind an interface (for example `IBossBrain`), so a rule-based brain can later be swapped for an ML-Agents brain without changing the boss.
 - Gameplay code raises C# events for things the tracker needs (player hit, attack used, dodge, reaction moments). Other scripts listen to these events instead of reaching into the player.
-- Use simple placeholder art (coloured shapes) until David adds real art.
+- Use simple placeholder art (coloured shapes) until David adds his own art. Plan for 32 pixels per unit, and put visuals on a separate child object (for example `Visual`) so sprites can be swapped without changing code.
 - Short comments that explain *why*, not *what*.
 - Don't add packages or assets without asking David first.
 - If you are not sure how a Unity or ML-Agents API works in this version, say so instead of guessing.
