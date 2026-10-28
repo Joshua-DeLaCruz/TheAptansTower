@@ -48,6 +48,12 @@ public static class M1TestSceneBuilder
     private const float LevelMinX = -21f;
     private const float LevelMaxX = 21f;
 
+    // --- Camera vertical follow: on platform D the camera rises about 2.2 instead of 6,
+    //     so the top of the floor stays just above the bottom of the screen ---
+    private const float CameraVerticalFollowStrength = 0.35f;
+    private const float CameraVerticalSmoothTime = 0.35f;
+    private const float CameraScreenEdgeMargin = 1.5f;
+
     [MenuItem("Tools/Aptans/Build M1 Test Scene")]
     public static void BuildScene()
     {
@@ -131,6 +137,11 @@ public static class M1TestSceneBuilder
         var follow = camera.AddComponent<CameraFollow>();
         var so = new SerializedObject(follow);
         so.FindProperty("target").objectReferenceValue = target;
+        // Set here too (CameraFollow would find it at runtime), so the link is visible in the Inspector.
+        so.FindProperty("targetMovement").objectReferenceValue = target.GetComponent<PlayerMovement>();
+        so.FindProperty("verticalFollowStrength").floatValue = CameraVerticalFollowStrength;
+        so.FindProperty("verticalSmoothTime").floatValue = CameraVerticalSmoothTime;
+        so.FindProperty("screenEdgeMargin").floatValue = CameraScreenEdgeMargin;
         so.FindProperty("clampHorizontal").boolValue = true;
         so.FindProperty("levelMinX").floatValue = LevelMinX;
         so.FindProperty("levelMaxX").floatValue = LevelMaxX;
