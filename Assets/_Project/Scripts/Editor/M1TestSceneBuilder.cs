@@ -15,6 +15,7 @@ public static class M1TestSceneBuilder
     // --- Paths ---
     private const string ScenePath = "Assets/_Project/Scenes/M1_TestScene.unity";
     private const string PlaceholderSpritePath = "Assets/_Project/Art/Placeholder/Square.png";
+    private const string PlayerMaterialPath = "Assets/_Project/Data/Physics/PlayerNoFriction.physicsMaterial2D";
 
     // --- Art settings (art is planned at 32 pixels per unit) ---
     private const int PixelsPerUnit = 32;
@@ -43,6 +44,10 @@ public static class M1TestSceneBuilder
     private static readonly Vector2 PlayerColliderSize = new Vector2(0.8f, 1.8f);
     private const float PlayerGravityScale = 3f;
 
+    // --- Level bounds: outer faces of the walls, so the camera never shows past them ---
+    private const float LevelMinX = -21f;
+    private const float LevelMaxX = 21f;
+
     [MenuItem("Tools/Aptans/Build M1 Test Scene")]
     public static void BuildScene()
     {
@@ -59,6 +64,7 @@ public static class M1TestSceneBuilder
         WarnIfNoRenderPipeline();
 
         Sprite square = GetOrCreatePlaceholderSprite();
+        PhysicsMaterial2D playerMaterial = GetOrCreatePlayerMaterial();
         int groundLayer = EnsureLayer(GroundLayerName);
         int playerLayer = EnsureLayer(PlayerLayerName);
         // Writes TagManager to disk now; otherwise the new layers only exist in memory until the editor quits.
@@ -72,10 +78,11 @@ public static class M1TestSceneBuilder
         EnsureFolder(Path.GetDirectoryName(ScenePath).Replace('\\', '/'));
         Scene scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
-        CreateCamera();
+        GameObject camera = CreateCamera();
         CreateGlobalLight();
         CreateLevel(square, groundLayer);
-        GameObject player = CreatePlayer(square, playerLayer);
+        GameObject player = CreatePlayer(square, playerLayer, groundLayer, playerMaterial);
+        AddCameraFollow(camera, player.transform);
 
         EditorSceneManager.MarkSceneDirty(scene);
         if (!EditorSceneManager.SaveScene(scene, ScenePath))
@@ -93,9 +100,9 @@ public static class M1TestSceneBuilder
 
     // ---------------------------------------------------------------- Camera & light
 
-    // The camera is static for now: the floor is 40 units wide but the view is about 20.
-    // A camera follow is added in a later step.
-    private static void CreateCamera()
+    // The floor is 40 units wide but the view is about 20, so CameraFollow moves it.
+    // CameraFollow is added in AddCameraFollow, because it needs the player, which is created later.
+    private static GameObject CreateCamera()
     {
         var go = new GameObject("Main Camera");
         go.tag = "MainCamera";
@@ -115,6 +122,19 @@ public static class M1TestSceneBuilder
         pixelPerfect.assetsPPU = PixelsPerUnit;
         pixelPerfect.refResolutionX = ReferenceResolutionX;
         pixelPerfect.refResolutionY = ReferenceResolutionY;
+        return go;
+    }
+
+    // Separate from CreateCamera because it needs the player, which is created after the camera.
+    private static void AddCameraFollow(GameObject camera, Transform target)
+    {
+        var follow = camera.AddComponent<CameraFollow>();
+        var so = new SerializedObject(follow);
+        so.FindProperty("target").objectReferenceValue = target;
+        so.FindProperty("clampHorizontal").boolValue = true;
+        so.FindProperty("levelMinX").floatValue = LevelMinX;
+        so.FindProperty("levelMaxX").floatValue = LevelMaxX;
+        so.ApplyModifiedPropertiesWithoutUndo();
     }
 
     private static void CreateGlobalLight()
@@ -135,20 +155,20 @@ public static class M1TestSceneBuilder
 
     // ---------------------------------------------------------------- Level
 
-    // Floor top is at y = -4.5. Normal jump is planned at ~3 units.
+    // Floor top is at y = -4.5. A full (held) jump peaks at about 4.4 units; a quick tap at about 2.
     private static void CreateLevel(Sprite square, int groundLayer)
     {
         Transform level = new GameObject("Level").transform;
 
         CreateGroundPiece("Floor", level, new Vector2(0f, -5f), new Vector2(40f, 1f), FloorColour, square, groundLayer);
 
-        // Top 2 units above the floor: easy normal jump.
+        // Top 2 units above the floor: easy, even with a half-held jump.
         CreateGroundPiece("Platform_Low_A", level, new Vector2(-7f, -2.75f), new Vector2(4f, 0.5f), PlatformColour, square, groundLayer);
-        // Top 2 units above Platform_Low_A: reachable by chaining jumps.
+        // Top 2 units above Platform_Low_A: reachable by chaining jumps from A.
         CreateGroundPiece("Platform_Mid_B", level, new Vector2(-3f, -0.75f), new Vector2(3f, 0.5f), PlatformColour, square, groundLayer);
-        // Top 2.5 units above the floor: near the edge of a normal jump.
+        // Top 2.5 units above the floor: needs more than a tap, but not a full jump.
         CreateGroundPiece("Platform_Low_C", level, new Vector2(3f, -2.25f), new Vector2(4f, 0.5f), PlatformColour, square, groundLayer);
-        // Top 3.75 units above Platform_Low_C: needs a higher jump than normal (tests jump height tuning).
+        // Top 3.75 units above Platform_Low_C: needs a mostly full jump from C (tests jump height tuning).
         CreateGroundPiece("Platform_High_D", level, new Vector2(8f, 1.5f), new Vector2(3f, 0.5f), HighPlatformColour, square, groundLayer);
 
         CreateGroundPiece("Wall_Left", level, new Vector2(-20.5f, 0.5f), new Vector2(1f, 12f), WallColour, square, groundLayer);
@@ -174,7 +194,8 @@ public static class M1TestSceneBuilder
 
     // ---------------------------------------------------------------- Player
 
-    private static GameObject CreatePlayer(Sprite square, int playerLayer)
+    private static GameObject CreatePlayer(Sprite square, int playerLayer, int groundLayer,
+        PhysicsMaterial2D material)
     {
         var go = new GameObject("Player");
         go.layer = playerLayer;
@@ -190,25 +211,33 @@ public static class M1TestSceneBuilder
         var capsule = go.AddComponent<CapsuleCollider2D>();
         capsule.direction = CapsuleDirection2D.Vertical;
         capsule.size = PlayerColliderSize;
+        // Zero friction, so pressing into a wall in the air doesn't make the player stick to it.
+        capsule.sharedMaterial = material;
 
         // Sliced with no borders simply stretches the square to the size, keeping the Visual unscaled too.
         CreateVisual(go.transform, square, PlayerColour, PlayerColliderSize, SpriteDrawMode.Sliced, PlayerSortingOrder);
 
-        AddPlayerComponents(go);
+        AddPlayerComponents(go, groundLayer);
         return go;
     }
 
     // EXTENSION POINT for the next M1 steps. Add the player scripts here once they exist, for example:
-    //   player.AddComponent<PlayerMovement>();
     //   player.AddComponent<PlayerDodge>();
     //   player.AddComponent<Health>();
     //   player.AddComponent<PlayerMeleeAttack>();
     //   player.AddComponent<PlayerDaggerThrow>();
     // Keep visuals on the Visual child; only logic and physics components go on this root object.
-    private static void AddPlayerComponents(GameObject player)
+    private static void AddPlayerComponents(GameObject player, int groundLayer)
     {
         // Edit-mode AddComponent runs Reset(), which fills in the default bindings.
         player.AddComponent<PlayerInputReader>();
+
+        // Private serialized fields can only be set from outside through SerializedObject.
+        var movement = player.AddComponent<PlayerMovement>();
+        var so = new SerializedObject(movement);
+        so.FindProperty("groundLayers").intValue = 1 << groundLayer;
+        so.FindProperty("visual").objectReferenceValue = player.transform.Find("Visual");
+        so.ApplyModifiedPropertiesWithoutUndo();
     }
 
     // ---------------------------------------------------------------- Shared helpers
@@ -260,6 +289,30 @@ public static class M1TestSceneBuilder
             Debug.LogError($"[M1TestSceneBuilder] {PlaceholderSpritePath} exists but is not imported as a Sprite. " +
                            "Delete it and run the builder again, or set Texture Type to Sprite.");
         return sprite;
+    }
+
+    // Reused if it exists; the values are always re-applied so an edited asset is put back to zero friction.
+    // Minimum combine makes the contact frictionless even against ground with its own friction.
+    private static PhysicsMaterial2D GetOrCreatePlayerMaterial()
+    {
+        var material = AssetDatabase.LoadAssetAtPath<PhysicsMaterial2D>(PlayerMaterialPath);
+        if (material == null)
+        {
+            EnsureFolder(Path.GetDirectoryName(PlayerMaterialPath).Replace('\\', '/'));
+            material = new PhysicsMaterial2D("PlayerNoFriction");
+            AssetDatabase.CreateAsset(material, PlayerMaterialPath);
+            Debug.Log($"[M1TestSceneBuilder] Created {PlayerMaterialPath}.");
+        }
+
+        if (material.friction != 0f || material.bounciness != 0f ||
+            material.frictionCombine != PhysicsMaterialCombine2D.Minimum)
+        {
+            material.friction = 0f;
+            material.bounciness = 0f;
+            material.frictionCombine = PhysicsMaterialCombine2D.Minimum;
+            EditorUtility.SetDirty(material);
+        }
+        return material;
     }
 
     /// <summary>Applies the placeholder import settings if they differ. Returns false if there is no TextureImporter.</summary>
