@@ -6,6 +6,8 @@ using UnityEngine.InputSystem;
 /// The single place the player reads input from. Other player scripts use the properties and
 /// events below, so only this file knows about the Input System and its bindings.
 /// </summary>
+// Input runs first (order -50), so every Update in the frame sees the same Move value.
+[DefaultExecutionOrder(-50)]
 public class PlayerInputReader : MonoBehaviour
 {
     // Serialized so the bindings show up (and can be changed) in the Inspector.

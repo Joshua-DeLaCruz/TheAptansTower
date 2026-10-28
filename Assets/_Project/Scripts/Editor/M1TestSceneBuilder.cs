@@ -233,7 +233,6 @@ public static class M1TestSceneBuilder
     }
 
     // EXTENSION POINT for the next M1 steps. Add the player scripts here once they exist, for example:
-    //   player.AddComponent<PlayerDodge>();
     //   player.AddComponent<Health>();
     //   player.AddComponent<PlayerMeleeAttack>();
     //   player.AddComponent<PlayerDaggerThrow>();
@@ -243,12 +242,23 @@ public static class M1TestSceneBuilder
         // Edit-mode AddComponent runs Reset(), which fills in the default bindings.
         player.AddComponent<PlayerInputReader>();
 
+        // Added before movement and the dodge, which open windows on it; the dodge's RequireComponent
+        // would otherwise add one itself. It owns the Visual's colour for the placeholder tint.
         // Private serialized fields can only be set from outside through SerializedObject.
+        var invulnerability = player.AddComponent<PlayerInvulnerability>();
+        var invulnerabilitySo = new SerializedObject(invulnerability);
+        invulnerabilitySo.FindProperty("feedbackRenderer").objectReferenceValue =
+            player.transform.Find("Visual").GetComponent<SpriteRenderer>();
+        invulnerabilitySo.ApplyModifiedPropertiesWithoutUndo();
+
         var movement = player.AddComponent<PlayerMovement>();
         var so = new SerializedObject(movement);
         so.FindProperty("groundLayers").intValue = 1 << groundLayer;
         so.FindProperty("visual").objectReferenceValue = player.transform.Find("Visual");
         so.ApplyModifiedPropertiesWithoutUndo();
+
+        // The dodge values keep their script defaults.
+        player.AddComponent<PlayerDodge>();
     }
 
     // ---------------------------------------------------------------- Shared helpers

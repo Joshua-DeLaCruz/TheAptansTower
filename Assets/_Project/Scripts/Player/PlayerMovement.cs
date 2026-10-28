@@ -5,8 +5,12 @@ using UnityEngine;
 /// <summary>
 /// Runs, jumps and falls. Reads input from PlayerInputReader and writes Rigidbody2D velocity
 /// once per physics step. Other scripts read IsGrounded / FacingDirection and listen to
-/// Jumped / Landed instead of reaching into this class.
+/// Jumped / Landed instead of reaching into this class. Every take-off opens a short Jump window
+/// on PlayerInvulnerability, if the Player has one. A jump that cancels a dodge can carry on in the
+/// dodge's direction (StartJumpCarry).
 /// </summary>
+// Order 0 is the default, set explicitly: see "Execution order" in PlayerInvulnerability's remarks.
+[DefaultExecutionOrder(0)]
 [RequireComponent(typeof(Rigidbody2D), typeof(CapsuleCollider2D), typeof(PlayerInputReader))]
 public class PlayerMovement : MonoBehaviour
 {
@@ -30,10 +34,14 @@ public class PlayerMovement : MonoBehaviour
     [SerializeField] private float jumpCutMultiplier = 0.5f;
     [Tooltip("Seconds after take-off before a jump can be cut. Keeps a buffered tap as high as a normal tap.")]
     [SerializeField] private float minJumpTime = 0.08f;
-    [Tooltip("Seconds after walking off a ledge in which a jump still works.")]
+    [Tooltip("Seconds after walking off a ledge in which a jump still works. Keep at 0.03 or more (more than one physics step), or a jump can no longer cancel a dodge.")]
+    [Min(0.03f)]
     [SerializeField] private float coyoteTime = 0.1f;
     [Tooltip("Seconds a jump press is remembered before landing.")]
     [SerializeField] private float jumpBufferTime = 0.12f;
+    [Tooltip("Seconds the player can't be hit right after take-off. Needs a PlayerInvulnerability on the Player; without one, jumps simply have no safe moment. 0 = none.")]
+    [Min(0f)]
+    [SerializeField] private float jumpInvulnerableDuration = 0.1f;
 
     [Header("Fall")]
     [Tooltip("Gravity is multiplied by this while falling, so jumps feel snappy instead of floaty.")]
@@ -63,6 +71,8 @@ public class PlayerMovement : MonoBehaviour
     private Rigidbody2D body;
     private CapsuleCollider2D capsule;
     private PlayerInputReader input;
+    // Optional: without it, jumps simply have no safe window.
+    private PlayerInvulnerability invulnerability;
 
     private float baseGravityScale;
     private float lastGroundedTime = float.NegativeInfinity;
@@ -71,6 +81,14 @@ public class PlayerMovement : MonoBehaviour
     private bool hasTouchedGround;
     private bool jumpCutAvailable;
     private bool controlLocked;
+
+    // Jump carry (see StartJumpCarry). Armed = waiting for a jump in this step; active = that jump is carrying.
+    private bool carryArmed;
+    private bool carryActive;
+    private int carryDirection;
+    private float carryExtraSpeed;
+    private float carryFadeTime;
+    private float carryElapsed;
 
     private ContactFilter2D groundFilter;
     private readonly List<Collider2D> groundHits = new List<Collider2D>(1);
@@ -82,6 +100,25 @@ public class PlayerMovement : MonoBehaviour
 
     public bool IsControlLocked => controlLocked;
 
+    /// <summary>Top run speed in units per second. The dodge hands back control at this speed, so running continues smoothly.</summary>
+    public float RunSpeed => runSpeed;
+
+    /// <summary>
+    /// True while a jump is allowed: on the ground, or within Coyote Time after leaving it.
+    /// Doesn't look at the button. TryJump uses exactly this check.
+    /// </summary>
+    public bool CanJump => Time.time - lastGroundedTime <= coyoteTime;
+
+    /// <summary>True while a jump press is still remembered (within Jump Buffer Time) and not used yet. TryJump uses exactly this check.</summary>
+    public bool HasBufferedJump => Time.time - lastJumpPressedTime <= jumpBufferTime;
+
+    /// <summary>
+    /// Time.time of the button press that caused the current (or last) jump; negative infinity before
+    /// the first jump. Measure reaction time from this value, not from when Jumped fires: a buffered
+    /// press can be up to Jump Buffer Time older than the take-off.
+    /// </summary>
+    public float JumpPressTime { get; private set; } = float.NegativeInfinity;
+
     public event Action Jumped;
     public event Action Landed;
 
@@ -90,6 +127,7 @@ public class PlayerMovement : MonoBehaviour
         body = GetComponent<Rigidbody2D>();
         capsule = GetComponent<CapsuleCollider2D>();
         input = GetComponent<PlayerInputReader>();
+        invulnerability = GetComponent<PlayerInvulnerability>();
 
         // The Inspector value on the Rigidbody is the "rising" gravity; falling gravity is derived from it.
         baseGravityScale = body.gravityScale;
@@ -109,6 +147,7 @@ public class PlayerMovement : MonoBehaviour
     private void OnDisable()
     {
         input.JumpPressed -= OnJumpPressed;
+        EndJumpCarry();
         // Don't leave the body stuck with the stronger falling gravity while this is off.
         if (body != null)
             body.gravityScale = baseGravityScale;
@@ -127,16 +166,10 @@ public class PlayerMovement : MonoBehaviour
             return;
 
         float moveX = input.MoveX;
-        if (moveX > FacingThreshold && FacingDirection != 1)
-        {
-            FacingDirection = 1;
-            ApplyFacing();
-        }
-        else if (moveX < -FacingThreshold && FacingDirection != -1)
-        {
-            FacingDirection = -1;
-            ApplyFacing();
-        }
+        if (moveX > FacingThreshold)
+            SetFacing(1);
+        else if (moveX < -FacingThreshold)
+            SetFacing(-1);
     }
 
     private void FixedUpdate()
@@ -150,6 +183,8 @@ public class PlayerMovement : MonoBehaviour
         Vector2 velocity = body.linearVelocity;
 
         TryJump(ref velocity);
+        // An armed carry is only for a jump in this very step (see StartJumpCarry).
+        carryArmed = false;
         ApplyJumpCut(ref velocity);
         ApplyGravity(velocity);
         velocity.x = MoveHorizontal(velocity.x);
@@ -163,14 +198,64 @@ public class PlayerMovement : MonoBehaviour
     /// <summary>
     /// While locked, this component stops writing velocity and gravity scale and ignores input,
     /// so e.g. the dodge can set its own velocity. Ground checks and Landed keep working.
+    /// Releasing the lock gives the normal gravity back straight away.
     /// A jump pressed during the lock is still buffered and can fire right after unlocking.
     /// </summary>
     public void SetControlLocked(bool locked)
     {
+        bool wasLocked = controlLocked;
         controlLocked = locked;
-        // A jump cut after the lock ends would chop whatever velocity the dodge left behind.
+
+        // A jump cut after the lock ends would chop whatever velocity the dodge left behind,
+        // and a carry would keep pushing against whatever took the lock.
         if (locked)
+        {
             jumpCutAvailable = false;
+            EndJumpCarry();
+        }
+
+        // This component owns gravity, so it restores it itself instead of relying on the order
+        // scripts run in. The next FixedUpdate picks rising or falling gravity again.
+        if (wasLocked && !locked && body != null)
+            body.gravityScale = baseGravityScale;
+    }
+
+    /// <summary>
+    /// Faces right (+1) or left (-1) and flips the Visual; 0 keeps the current facing.
+    /// Works while control is locked, so e.g. the dodge can face the way it goes.
+    /// </summary>
+    public void SetFacing(int direction)
+    {
+        if (direction == 0)
+            return;
+
+        int facing = direction > 0 ? 1 : -1;
+        if (facing == FacingDirection)
+            return;
+
+        FacingDirection = facing;
+        ApplyFacing();
+    }
+
+    /// <summary>
+    /// Arms a carry for the jump that takes off in this physics step, in <paramref name="direction"/> (+1 or -1).
+    /// At take-off this component sets the horizontal speed to run speed plus <paramref name="extraSpeed"/>;
+    /// after that, with no input or input that way, the jump moves as if that way were fully held, and the
+    /// extra fades linearly to 0 over <paramref name="fadeTime"/> seconds.
+    /// The dodge calls this when a jump ends it, after unlocking and before PlayerMovement runs in that step.
+    /// Only that jump uses it; if no jump takes off in this step it is dropped, so a normal jump never carries.
+    /// Holding the other way at take-off skips the carry (a jump back). Steering the other way later, landing,
+    /// or locking or disabling this component ends it. Ignored while control is locked or this is disabled.
+    /// </summary>
+    public void StartJumpCarry(int direction, float extraSpeed, float fadeTime)
+    {
+        if (!isActiveAndEnabled || controlLocked || direction == 0)
+            return;
+
+        carryArmed = true;
+        carryDirection = direction > 0 ? 1 : -1;
+        carryExtraSpeed = Mathf.Max(0f, extraSpeed);
+        carryFadeTime = Mathf.Max(0f, fadeTime);
     }
 
     // ---------------------------------------------------------------- Steps
@@ -195,9 +280,8 @@ public class PlayerMovement : MonoBehaviour
 
     private void TryJump(ref Vector2 velocity)
     {
-        bool jumpBuffered = Time.time - lastJumpPressedTime <= jumpBufferTime;
-        bool canJump = Time.time - lastGroundedTime <= coyoteTime;
-        if (!jumpBuffered || !canJump)
+        // The same public checks the dodge reads to decide on a jump-cancel, so the two always agree.
+        if (!HasBufferedJump || !CanJump)
             return;
 
         // Height-based jump: from v^2 = 2 * g * h, the launch speed that reaches height h
@@ -208,12 +292,26 @@ public class PlayerMovement : MonoBehaviour
         float gravity = Mathf.Abs(Physics2D.gravity.y * baseGravityScale);
         velocity.y = Mathf.Sqrt(2f * gravity * jumpHeight) + 0.5f * gravity * Time.fixedDeltaTime;
 
+        // Read before the press is consumed below.
+        JumpPressTime = lastJumpPressedTime;
+
         // Consume both, so one press gives one jump and coyote time can't give a second one.
         lastJumpPressedTime = float.NegativeInfinity;
         lastGroundedTime = float.NegativeInfinity;
         jumpCutAvailable = true;
         jumpStartTime = Time.time;
         IsGrounded = false;
+
+        // Every take-off starts or clears the carry, so an old carry can never leak into a later jump.
+        // Holding the other way now means "jump back", so the carry is skipped and the speed stays as it was.
+        carryActive = carryArmed && !IsSteeringAgainstCarry();
+        carryElapsed = 0f;
+        if (carryActive)
+            velocity.x = carryDirection * (runSpeed + carryExtraSpeed);
+
+        // Opened before Jumped, so Jumped listeners already see the window.
+        if (invulnerability != null)
+            invulnerability.Open(InvulnerabilitySource.Jump, jumpInvulnerableDuration);
 
         Jumped?.Invoke();
     }
@@ -252,6 +350,13 @@ public class PlayerMovement : MonoBehaviour
         float target = input.MoveX * runSpeed;
         bool hasInput = Mathf.Abs(target) > 0.01f;
 
+        // A carried jump moves as if its direction were held (see StartJumpCarry).
+        if (StepCarry(out float carryTarget))
+        {
+            target = carryTarget;
+            hasInput = true;
+        }
+
         float rate;
         if (IsGrounded)
             rate = hasInput ? groundAcceleration : groundDeceleration;
@@ -259,6 +364,44 @@ public class PlayerMovement : MonoBehaviour
             rate = hasInput ? airAcceleration : airDeceleration;
 
         return Mathf.MoveTowards(currentX, target, rate * Time.fixedDeltaTime);
+    }
+
+    // Moves the carry on by one physics step. Ends it and returns false once the player has landed or
+    // steers back; otherwise returns true with the speed to aim for, including the boost that is left.
+    // There is no wall rule: pressing into a wall in the air is harmless with the zero-friction material,
+    // and a speed test would also end the carry when the capsule clips the side of a thin platform.
+    private bool StepCarry(out float target)
+    {
+        target = 0f;
+        if (!carryActive)
+            return false;
+
+        if (IsGrounded || IsSteeringAgainstCarry())
+        {
+            EndJumpCarry();
+            return false;
+        }
+
+        // Linear fade: the full extra at take-off, nothing left after the fade time.
+        float boost = carryFadeTime > 0f
+            ? carryExtraSpeed * Mathf.Clamp01(1f - carryElapsed / carryFadeTime)
+            : 0f;
+        carryElapsed += Time.fixedDeltaTime;
+        target = carryDirection * (runSpeed + boost);
+        return true;
+    }
+
+    // One rule for "the player wants to go the other way", used at take-off and in every carried step,
+    // so a jump back at the cancel and steering back later always agree.
+    private bool IsSteeringAgainstCarry()
+    {
+        return input.MoveX * carryDirection < -FacingThreshold;
+    }
+
+    private void EndJumpCarry()
+    {
+        carryArmed = false;
+        carryActive = false;
     }
 
     private void ApplyFacing()
