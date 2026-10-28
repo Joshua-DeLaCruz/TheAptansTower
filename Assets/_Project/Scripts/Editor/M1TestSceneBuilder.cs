@@ -26,6 +26,7 @@ public static class M1TestSceneBuilder
     // --- Layers ---
     private const string GroundLayerName = "Ground";
     private const string PlayerLayerName = "Player";
+    private const string EnemyLayerName = "Enemy";
 
     // --- Placeholder colours (tweak here) ---
     private static readonly Color BackgroundColour = new Color(0.08f, 0.08f, 0.12f);
@@ -34,15 +35,26 @@ public static class M1TestSceneBuilder
     private static readonly Color HighPlatformColour = new Color(0.75f, 0.6f, 0.2f);
     private static readonly Color WallColour = new Color(0.25f, 0.25f, 0.3f);
     private static readonly Color PlayerColour = new Color(0.55f, 0.8f, 1f);
+    private static readonly Color TrainingDummyColour = new Color(1f, 0.55f, 0.15f);
 
     // --- Sorting (no custom sorting layers yet, so order in layer is enough) ---
     private const int LevelSortingOrder = 0;
+    // Between the level and the player, so the player stays visible while standing inside the dummy.
+    private const int EnemySortingOrder = 5;
     private const int PlayerSortingOrder = 10;
 
     // --- Player starting physics values ---
     private static readonly Vector2 PlayerStartPosition = new Vector2(0f, -3.4f);
     private static readonly Vector2 PlayerColliderSize = new Vector2(0.8f, 1.8f);
     private const float PlayerGravityScale = 3f;
+    private const int PlayerMaxHealth = 100;
+
+    // --- Training dummy: stands on the floor (top at y = -4.5) right of the platforms. Walking there from the
+    //     spawn needs no jump: the player's head (y -2.7) passes 0.2 under Platform_Low_C (underside -2.5).
+    //     Only Platform_Low_A (underside -3.0, x -9 to -5) and the walls block the floor, so a full 3.5-unit dodge
+    //     either way, started up to 1 unit beside the dummy, stays at least 1.2 clear of Wall_Right (x 20) ---
+    private static readonly Vector2 TrainingDummyPosition = new Vector2(13f, -3.5f);
+    private static readonly Vector2 TrainingDummySize = new Vector2(1f, 2f);
 
     // --- Level bounds: outer faces of the walls, so the camera never shows past them ---
     private const float LevelMinX = -21f;
@@ -73,9 +85,10 @@ public static class M1TestSceneBuilder
         PhysicsMaterial2D playerMaterial = GetOrCreatePlayerMaterial();
         int groundLayer = EnsureLayer(GroundLayerName);
         int playerLayer = EnsureLayer(PlayerLayerName);
+        int enemyLayer = EnsureLayer(EnemyLayerName);
         // Writes TagManager to disk now; otherwise the new layers only exist in memory until the editor quits.
         AssetDatabase.SaveAssets();
-        if (square == null || groundLayer < 0 || playerLayer < 0)
+        if (square == null || groundLayer < 0 || playerLayer < 0 || enemyLayer < 0)
         {
             Debug.LogError("[M1TestSceneBuilder] Setup failed, scene not built. See the messages above.");
             return;
@@ -87,6 +100,7 @@ public static class M1TestSceneBuilder
         GameObject camera = CreateCamera();
         CreateGlobalLight();
         CreateLevel(square, groundLayer);
+        CreateTrainingDummy(square, enemyLayer);
         GameObject player = CreatePlayer(square, playerLayer, groundLayer, playerMaterial);
         AddCameraFollow(camera, player.transform);
 
@@ -218,6 +232,9 @@ public static class M1TestSceneBuilder
         body.interpolation = RigidbodyInterpolation2D.Interpolate;
         body.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
         body.gravityScale = PlayerGravityScale;
+        // A sleeping body gets no OnTriggerStay2D calls. Never Sleep makes sure a player standing still in the
+        // dummy (later spikes or a boss) keeps being hit.
+        body.sleepMode = RigidbodySleepMode2D.NeverSleep;
 
         var capsule = go.AddComponent<CapsuleCollider2D>();
         capsule.direction = CapsuleDirection2D.Vertical;
@@ -233,7 +250,6 @@ public static class M1TestSceneBuilder
     }
 
     // EXTENSION POINT for the next M1 steps. Add the player scripts here once they exist, for example:
-    //   player.AddComponent<Health>();
     //   player.AddComponent<PlayerMeleeAttack>();
     //   player.AddComponent<PlayerDaggerThrow>();
     // Keep visuals on the Visual child; only logic and physics components go on this root object.
@@ -259,6 +275,42 @@ public static class M1TestSceneBuilder
 
         // The dodge values keep their script defaults.
         player.AddComponent<PlayerDodge>();
+
+        // Health finds PlayerInvulnerability itself at runtime, so its place in this list doesn't matter.
+        var health = player.AddComponent<Health>();
+        var healthSo = new SerializedObject(health);
+        // Looked up by name; Health is David's file, so a rename gives a warning here instead of an exception.
+        SerializedProperty maxHealth = healthSo.FindProperty("maxHealth");
+        if (maxHealth != null)
+        {
+            maxHealth.intValue = PlayerMaxHealth;
+            healthSo.ApplyModifiedPropertiesWithoutUndo();
+        }
+        else
+        {
+            Debug.LogWarning("[M1TestSceneBuilder] Health has no 'maxHealth' field, so it keeps its own default. " +
+                             "Update the field name in AddPlayerComponents.");
+        }
+    }
+
+    // ---------------------------------------------------------------- Training dummy
+
+    // No Rigidbody2D: the Player's dynamic body is enough for Unity to send the trigger callbacks.
+    private static void CreateTrainingDummy(Sprite square, int enemyLayer)
+    {
+        var go = new GameObject("TrainingDummy");
+        go.layer = enemyLayer;
+        go.transform.position = TrainingDummyPosition;
+
+        var box = go.AddComponent<BoxCollider2D>();
+        box.size = TrainingDummySize;
+        // A trigger, so the player walks into it and gets hit instead of being blocked by it.
+        box.isTrigger = true;
+
+        CreateVisual(go.transform, square, TrainingDummyColour, TrainingDummySize, SpriteDrawMode.Sliced, EnemySortingOrder);
+
+        // Contact Damage, Hit Interval and Log Hits keep their script defaults.
+        go.AddComponent<TrainingDummy>();
     }
 
     // ---------------------------------------------------------------- Shared helpers

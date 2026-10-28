@@ -53,7 +53,7 @@ Movement, jumping, a dodge, a basic melee attack plus at least one second attack
 Decisions for M1:
 - The second attack is a **thrown dagger**. Daggers are limited: the player buys them in the shop (M2). Until then the player starts with a small amount set in the Inspector. The dagger count lives behind its own small interface, so it can later be connected to the inventory and shop.
 - Input is defined in code (Input System `InputAction`s with default keyboard and gamepad bindings), not in an `.inputactions` asset.
-- David writes `Health` and `IDamageable` himself from outlines with TODO comments; Claude reviews them afterwards.
+- David writes the `Health` logic himself from an outline with TODO comments; Claude reviews it afterwards. The `IDamageable` interface (`bool TakeDamage(int amount, GameObject source)`) and a `TrainingDummy` test tool are provided.
 - The dodge only works on the ground. Every jump gets a short safe window at take-off (adjustable, 0.1 s by default). Jumping during a dodge cancels it into a running jump in the dodge's direction (even with no direction held), and the jump's window replaces the rest of the dodge's window. The jump keeps part of the dodge's speed (Inspector slider, 0.3 by default), which fades out during the jump; at most it lands about 1.1 units further than a normal running jump. Holding the opposite direction at the cancel gives a normal jump back.
 - `PlayerInvulnerability` is the single place that answers "can the player be hit right now?". The dodge and the jump open windows on it, and `Health` only asks this component.
 
