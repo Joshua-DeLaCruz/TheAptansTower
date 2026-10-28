@@ -64,10 +64,7 @@ public class Health : MonoBehaviour, IDamageable
             return false;
 
         if (IsDead)
-        {
-            Debug.Log("Ignored: dead");
             return false;
-        }
 
         if (invulnerability != null && invulnerability.IsInvulnerable)
             return false;

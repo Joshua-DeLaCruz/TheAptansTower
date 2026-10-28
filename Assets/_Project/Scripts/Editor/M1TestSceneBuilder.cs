@@ -291,6 +291,10 @@ public static class M1TestSceneBuilder
             Debug.LogWarning("[M1TestSceneBuilder] Health has no 'maxHealth' field, so it keeps its own default. " +
                              "Update the field name in AddPlayerComponents.");
         }
+
+        // David's death handler; it finds its references itself in Awake. Keep it after Health: its
+        // RequireComponent would otherwise add a Health first, and the AddComponent<Health> above would fail.
+        player.AddComponent<PlayerDeathHandler>();
     }
 
     // ---------------------------------------------------------------- Training dummy
