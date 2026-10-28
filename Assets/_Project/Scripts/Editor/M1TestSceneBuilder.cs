@@ -199,15 +199,16 @@ public static class M1TestSceneBuilder
     }
 
     // EXTENSION POINT for the next M1 steps. Add the player scripts here once they exist, for example:
-    //   go.AddComponent<PlayerInputReader>();
-    //   go.AddComponent<PlayerMovement>();
-    //   go.AddComponent<PlayerDodge>();
-    //   go.AddComponent<Health>();
-    //   go.AddComponent<PlayerMeleeAttack>();
-    //   go.AddComponent<PlayerDaggerThrow>();
+    //   player.AddComponent<PlayerMovement>();
+    //   player.AddComponent<PlayerDodge>();
+    //   player.AddComponent<Health>();
+    //   player.AddComponent<PlayerMeleeAttack>();
+    //   player.AddComponent<PlayerDaggerThrow>();
     // Keep visuals on the Visual child; only logic and physics components go on this root object.
     private static void AddPlayerComponents(GameObject player)
     {
+        // Edit-mode AddComponent runs Reset(), which fills in the default bindings.
+        player.AddComponent<PlayerInputReader>();
     }
 
     // ---------------------------------------------------------------- Shared helpers
